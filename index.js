@@ -1,5 +1,13 @@
 // 订阅续期通知网站 - 基于CloudFlare Workers (完全优化版)
 
+import {
+  checkWebMonitorSubscription,
+  fetchWebMonitorItems,
+  formatWebMonitorNotification,
+  normalizeWebMonitorSettings,
+  validateMonitorUrl
+} from './web-monitor.js';
+
 // 时区处理工具函数
 // 常量：毫秒转换为小时/天，便于全局复用
 const MS_PER_HOUR = 1000 * 60 * 60;
@@ -897,6 +905,9 @@ const adminPage = `
         <button id="addSubscriptionBtn" class="btn-primary text-white px-4 py-2 rounded-md text-sm font-medium flex items-center shrink-0">
           <i class="fas fa-plus mr-2"></i>添加新订阅
         </button>
+        <button id="addWebMonitorBtn" class="btn-info text-white px-4 py-2 rounded-md text-sm font-medium flex items-center shrink-0">
+          <i class="fas fa-globe mr-2"></i>添加网页监控
+        </button>
       </div>
       </div>
     </div>
@@ -1246,6 +1257,84 @@ const adminPage = `
             class="btn-primary text-white px-4 py-2 rounded-md text-sm font-medium">
             <i class="fas fa-save mr-2"></i>保存
           </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="webMonitorModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 modal-container hidden flex items-center justify-center z-50">
+    <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-screen overflow-y-auto">
+      <div class="bg-gray-50 px-6 py-4 border-b border-gray-200 rounded-t-lg flex items-center justify-between">
+        <h3 id="webMonitorModalTitle" class="text-lg font-medium text-gray-900">添加网页监控</h3>
+        <button type="button" id="closeWebMonitorModal" class="text-gray-400 hover:text-gray-600">
+          <i class="fas fa-times text-xl"></i>
+        </button>
+      </div>
+      <form id="webMonitorForm" class="p-6 space-y-5">
+        <input type="hidden" id="webMonitorId">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+          <div>
+            <label for="webMonitorName" class="block text-sm font-medium text-gray-700 mb-1">监控名称 *</label>
+            <input type="text" id="webMonitorName" required placeholder="例如：PT开放注册"
+              class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
+          </div>
+          <div>
+            <label for="webMonitorCategory" class="block text-sm font-medium text-gray-700 mb-1">分类标签</label>
+            <input type="text" id="webMonitorCategory" placeholder="例如：PT / 提醒"
+              class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
+          </div>
+        </div>
+        <div>
+          <label for="webMonitorUrl" class="block text-sm font-medium text-gray-700 mb-1">监控网址 *</label>
+          <input type="url" id="webMonitorUrl" required placeholder="https://example.com/news/"
+            class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+          <div>
+            <label for="webMonitorInterval" class="block text-sm font-medium text-gray-700 mb-1">检查间隔（小时）*</label>
+            <input type="number" id="webMonitorInterval" min="1" max="168" value="24" required
+              class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
+            <p class="mt-1 text-xs text-gray-500">当前 Worker 每天运行一次，建议保持 24 小时。</p>
+          </div>
+          <div class="flex items-end pb-6">
+            <label class="inline-flex items-center">
+              <input type="checkbox" id="webMonitorActive" checked class="form-checkbox h-4 w-4 text-indigo-600 rounded">
+              <span class="ml-2 text-sm text-gray-700">启用网页监控</span>
+            </label>
+          </div>
+        </div>
+        <details class="border border-gray-200 rounded-md p-4">
+          <summary class="cursor-pointer text-sm font-medium text-gray-700">高级解析设置</summary>
+          <div class="space-y-4 mt-4">
+            <div>
+              <label for="webMonitorItemSelector" class="block text-sm font-medium text-gray-700 mb-1">文章链接 CSS 选择器 *</label>
+              <input type="text" id="webMonitorItemSelector" value="h2.entry-title a" required
+                class="w-full px-3 py-2 border border-gray-300 rounded-md font-mono text-sm">
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label for="webMonitorDateSelector" class="block text-sm font-medium text-gray-700 mb-1">发布时间选择器</label>
+                <input type="text" id="webMonitorDateSelector" value="article time[datetime]"
+                  class="w-full px-3 py-2 border border-gray-300 rounded-md font-mono text-sm">
+              </div>
+              <div>
+                <label for="webMonitorSummarySelector" class="block text-sm font-medium text-gray-700 mb-1">摘要选择器</label>
+                <input type="text" id="webMonitorSummarySelector" value="article .entry-content"
+                  class="w-full px-3 py-2 border border-gray-300 rounded-md font-mono text-sm">
+              </div>
+            </div>
+          </div>
+        </details>
+        <div>
+          <label for="webMonitorNotes" class="block text-sm font-medium text-gray-700 mb-1">备注</label>
+          <textarea id="webMonitorNotes" rows="2" class="w-full px-3 py-2 border border-gray-300 rounded-md"></textarea>
+        </div>
+        <div class="rounded-md bg-blue-50 p-3 text-sm text-blue-700">
+          首次检查只会建立当前内容基线，不会把旧文章当成新内容发送。
+        </div>
+        <div class="flex justify-end space-x-3 pt-4 border-t border-gray-200">
+          <button type="button" id="cancelWebMonitorBtn" class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">取消</button>
+          <button type="submit" class="btn-primary text-white px-4 py-2 rounded-md text-sm font-medium"><i class="fas fa-save mr-2"></i>保存</button>
         </div>
       </form>
     </div>
@@ -1674,6 +1763,15 @@ const lunarBiz = {
         .filter(token => token.length > 0);
     }
 
+    function escapeHtml(value) {
+      return String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
     function populateCategoryFilter(subscriptions) {
       const select = document.getElementById('categoryFilter');
       if (!select) {
@@ -1837,7 +1935,9 @@ const lunarBiz = {
             subscription.name,
             subscription.customType,
             subscription.notes,
-            subscription.category
+            subscription.category,
+            subscription.monitorUrl,
+            subscription.monitorLatestTitle
           ].filter(Boolean).join(' ').toLowerCase();
           return haystack.includes(keyword);
         });
@@ -1848,7 +1948,14 @@ const lunarBiz = {
         return;
       }
 
-      filtered.sort((a, b) => new Date(a.expiryDate) - new Date(b.expiryDate));
+      filtered.sort((a, b) => {
+        const aMonitor = a.subscriptionMode === 'web-monitor';
+        const bMonitor = b.subscriptionMode === 'web-monitor';
+        if (aMonitor && bMonitor) return String(a.name || '').localeCompare(String(b.name || ''), 'zh-CN');
+        if (aMonitor) return 1;
+        if (bMonitor) return -1;
+        return new Date(a.expiryDate) - new Date(b.expiryDate);
+      });
       tbody.innerHTML = '';
 
       const currentTime = new Date();
@@ -1856,6 +1963,66 @@ const lunarBiz = {
       filtered.forEach(subscription => {
         const row = document.createElement('tr');
         row.className = subscription.isActive === false ? 'hover:bg-gray-50 bg-gray-100' : 'hover:bg-gray-50';
+
+        if (subscription.subscriptionMode === 'web-monitor') {
+          const status = subscription.monitorStatus || 'pending';
+          const statusMap = {
+            pending: ['待首次检查', 'bg-blue-500', 'fa-clock'],
+            ready: ['运行正常', 'bg-green-500', 'fa-check-circle'],
+            error: ['检查失败', 'bg-red-500', 'fa-exclamation-circle'],
+            'notify-error': ['通知失败', 'bg-red-500', 'fa-exclamation-circle']
+          };
+          const currentStatus = subscription.isActive === false
+            ? ['已停用', 'bg-gray-500', 'fa-pause-circle']
+            : (statusMap[status] || statusMap.pending);
+          let lastCheckedText = '尚未检查';
+          if (subscription.monitorLastAttemptAt) {
+            try {
+              lastCheckedText = new Date(subscription.monitorLastAttemptAt).toLocaleString('zh-CN', { timeZone: globalTimezone });
+            } catch (error) {
+              lastCheckedText = new Date(subscription.monitorLastAttemptAt).toLocaleString('zh-CN');
+            }
+          }
+          const latestTitle = subscription.monitorLatestTitle
+            ? '<div class="text-xs text-gray-500 mt-1">最新：' + escapeHtml(subscription.monitorLatestTitle) + '</div>'
+            : '';
+          const errorText = subscription.monitorLastError
+            ? '<div class="text-xs text-red-500 mt-1">' + escapeHtml(subscription.monitorLastError) + '</div>'
+            : '';
+          const categoryTokens = normalizeCategoryTokens(subscription.category);
+          const categoryHtml = categoryTokens.length
+            ? '<div class="flex flex-wrap gap-2 mt-2">' + categoryTokens.map(cat => '<span class="px-2 py-0.5 bg-indigo-50 text-indigo-600 text-xs rounded-full"><i class="fas fa-tag mr-1"></i>' + escapeHtml(cat) + '</span>').join('') + '</div>'
+            : '';
+          const monitorUrl = escapeHtml(subscription.monitorUrl);
+          row.innerHTML =
+            '<td data-label="名称" class="px-4 py-3"><div class="td-content-wrapper">' +
+              '<div class="text-sm font-medium text-gray-900"><i class="fas fa-globe text-indigo-500 mr-1"></i>' + escapeHtml(subscription.name) + '</div>' +
+              (subscription.notes ? '<div class="text-xs text-gray-500 mt-1">' + escapeHtml(subscription.notes) + '</div>' : '') +
+            '</div></td>' +
+            '<td data-label="类型" class="px-4 py-3"><div class="td-content-wrapper">' +
+              '<div class="text-sm text-gray-900">网页监控</div>' + categoryHtml +
+            '</div></td>' +
+            '<td data-label="监控内容" class="px-4 py-3"><div class="td-content-wrapper">' +
+              '<a href="' + monitorUrl + '" target="_blank" rel="noopener noreferrer" class="text-sm text-indigo-600 hover:underline break-all">打开监控网页</a>' +
+              latestTitle + errorText +
+            '</div></td>' +
+            '<td data-label="检查设置" class="px-4 py-3"><div class="td-content-wrapper">' +
+              '<div><i class="fas fa-sync-alt mr-1"></i>每 ' + Number(subscription.monitorIntervalHours || 24) + ' 小时</div>' +
+              '<div class="text-xs text-gray-500 mt-1">上次：' + escapeHtml(lastCheckedText) + '</div>' +
+            '</div></td>' +
+            '<td data-label="状态" class="px-4 py-3"><div class="td-content-wrapper"><span class="px-2 py-1 text-xs font-medium rounded-full text-white ' + currentStatus[1] + '"><i class="fas ' + currentStatus[2] + ' mr-1"></i>' + currentStatus[0] + '</span></div></td>' +
+            '<td data-label="操作" class="px-4 py-3"><div class="action-buttons-wrapper">' +
+              '<button class="edit-web-monitor btn-primary text-white px-2 py-1 rounded text-xs whitespace-nowrap" data-id="' + subscription.id + '"><i class="fas fa-edit mr-1"></i>编辑</button>' +
+              '<button class="check-web-monitor btn-success text-white px-2 py-1 rounded text-xs whitespace-nowrap" data-id="' + subscription.id + '"><i class="fas fa-sync-alt mr-1"></i>检查</button>' +
+              '<button class="test-notify btn-info text-white px-2 py-1 rounded text-xs whitespace-nowrap" data-id="' + subscription.id + '"><i class="fas fa-paper-plane mr-1"></i>测试</button>' +
+              '<button class="delete btn-danger text-white px-2 py-1 rounded text-xs whitespace-nowrap" data-id="' + subscription.id + '"><i class="fas fa-trash-alt mr-1"></i>删除</button>' +
+              (subscription.isActive
+                ? '<button class="toggle-status btn-warning text-white px-2 py-1 rounded text-xs whitespace-nowrap" data-id="' + subscription.id + '" data-action="deactivate"><i class="fas fa-pause-circle mr-1"></i>停用</button>'
+                : '<button class="toggle-status btn-success text-white px-2 py-1 rounded text-xs whitespace-nowrap" data-id="' + subscription.id + '" data-action="activate"><i class="fas fa-play-circle mr-1"></i>启用</button>') +
+            '</div></td>';
+          tbody.appendChild(row);
+          return;
+        }
 
         const calendarTypeHtml = subscription.useLunar
           ? '<div class="text-xs text-purple-600 mt-1">日历类型：农历</div>'
@@ -2031,6 +2198,14 @@ const lunarBiz = {
         button.addEventListener('click', editSubscription);
       });
 
+      document.querySelectorAll('.edit-web-monitor').forEach(button => {
+        button.addEventListener('click', editWebMonitor);
+      });
+
+      document.querySelectorAll('.check-web-monitor').forEach(button => {
+        button.addEventListener('click', checkWebMonitorNowFromList);
+      });
+
       document.querySelectorAll('.delete').forEach(button => {
         button.addEventListener('click', deleteSubscription);
       });
@@ -2150,6 +2325,102 @@ const lunarBiz = {
         button.disabled = false;
       }
     }
+
+    function closeWebMonitorModal() {
+      document.getElementById('webMonitorModal').classList.add('hidden');
+    }
+
+    function openWebMonitorModal(subscription = null) {
+      document.getElementById('webMonitorForm').reset();
+      document.getElementById('webMonitorModalTitle').textContent = subscription ? '编辑网页监控' : '添加网页监控';
+      document.getElementById('webMonitorId').value = subscription ? subscription.id : '';
+      document.getElementById('webMonitorName').value = subscription ? (subscription.name || '') : '';
+      document.getElementById('webMonitorCategory').value = subscription ? (subscription.category || '') : '';
+      document.getElementById('webMonitorUrl').value = subscription ? (subscription.monitorUrl || '') : '';
+      document.getElementById('webMonitorInterval').value = subscription ? (subscription.monitorIntervalHours || 24) : 24;
+      document.getElementById('webMonitorItemSelector').value = subscription ? (subscription.monitorItemSelector || 'h2.entry-title a') : 'h2.entry-title a';
+      document.getElementById('webMonitorDateSelector').value = subscription ? (subscription.monitorDateSelector || 'article time[datetime]') : 'article time[datetime]';
+      document.getElementById('webMonitorSummarySelector').value = subscription ? (subscription.monitorSummarySelector || 'article .entry-content') : 'article .entry-content';
+      document.getElementById('webMonitorNotes').value = subscription ? (subscription.notes || '') : '';
+      document.getElementById('webMonitorActive').checked = subscription ? subscription.isActive !== false : true;
+      document.getElementById('webMonitorModal').classList.remove('hidden');
+    }
+
+    async function editWebMonitor(e) {
+      const button = e.target.closest('button');
+      const id = button ? button.dataset.id : '';
+      try {
+        const response = await fetch('/api/subscriptions/' + id);
+        const subscription = await response.json();
+        if (!response.ok || !subscription || subscription.subscriptionMode !== 'web-monitor') {
+          throw new Error(subscription.message || '网页监控不存在');
+        }
+        openWebMonitorModal(subscription);
+      } catch (error) {
+        showToast('加载网页监控失败：' + error.message, 'error');
+      }
+    }
+
+    async function checkWebMonitorNowFromList(e) {
+      const button = e.target.closest('button');
+      const id = button ? button.dataset.id : '';
+      const originalContent = button.innerHTML;
+      button.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>检查中';
+      button.disabled = true;
+      try {
+        const response = await fetch('/api/subscriptions/' + id + '/check-now', { method: 'POST' });
+        const result = await response.json();
+        showToast(result.message || (response.ok ? '检查完成' : '检查失败'), response.ok && result.success ? 'success' : 'error', 5000);
+        loadSubscriptions(false);
+      } catch (error) {
+        showToast('检查网页监控失败：' + error.message, 'error');
+      } finally {
+        button.innerHTML = originalContent;
+        button.disabled = false;
+      }
+    }
+
+    document.getElementById('addWebMonitorBtn').addEventListener('click', () => openWebMonitorModal());
+    document.getElementById('closeWebMonitorModal').addEventListener('click', closeWebMonitorModal);
+    document.getElementById('cancelWebMonitorBtn').addEventListener('click', closeWebMonitorModal);
+
+    document.getElementById('webMonitorForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const id = document.getElementById('webMonitorId').value;
+      const monitor = {
+        subscriptionMode: 'web-monitor',
+        name: document.getElementById('webMonitorName').value.trim(),
+        category: document.getElementById('webMonitorCategory').value.trim(),
+        monitorUrl: document.getElementById('webMonitorUrl').value.trim(),
+        monitorIntervalHours: Number(document.getElementById('webMonitorInterval').value) || 24,
+        monitorItemSelector: document.getElementById('webMonitorItemSelector').value.trim(),
+        monitorDateSelector: document.getElementById('webMonitorDateSelector').value.trim(),
+        monitorSummarySelector: document.getElementById('webMonitorSummarySelector').value.trim(),
+        notes: document.getElementById('webMonitorNotes').value.trim(),
+        isActive: document.getElementById('webMonitorActive').checked
+      };
+      const submitButton = e.target.querySelector('button[type="submit"]');
+      const originalContent = submitButton.innerHTML;
+      submitButton.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>保存中...';
+      submitButton.disabled = true;
+      try {
+        const response = await fetch(id ? '/api/subscriptions/' + id : '/api/subscriptions', {
+          method: id ? 'PUT' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(monitor)
+        });
+        const result = await response.json();
+        if (!response.ok || !result.success) throw new Error(result.message || '保存失败');
+        closeWebMonitorModal();
+        showToast(id ? '网页监控已更新' : '网页监控已添加', 'success');
+        loadSubscriptions();
+      } catch (error) {
+        showToast('保存网页监控失败：' + error.message, 'error');
+      } finally {
+        submitButton.innerHTML = originalContent;
+        submitButton.disabled = false;
+      }
+    });
     
     document.getElementById('addSubscriptionBtn').addEventListener('click', () => {
       document.getElementById('modalTitle').textContent = '添加新订阅';
@@ -4357,6 +4628,11 @@ const api = {
         return new Response(JSON.stringify(result), { status: result.success ? 200 : 500, headers: { 'Content-Type': 'application/json' } });
       }
 
+      if (parts[3] === 'check-now' && method === 'POST') {
+        const result = await checkWebMonitorNow(id, env);
+        return new Response(JSON.stringify(result), { status: result.success ? 200 : 400, headers: { 'Content-Type': 'application/json' } });
+      }
+
       if (method === 'GET') {
         const subscription = await getSubscription(id, env);
 
@@ -4631,9 +4907,169 @@ async function getSubscription(id, env) {
   return subscriptions.find(s => s.id === id);
 }
 
+async function saveSubscriptionRecord(subscription, env) {
+  const subscriptions = await getAllSubscriptions(env);
+  const index = subscriptions.findIndex(item => item.id === subscription.id);
+  if (index === -1) {
+    subscriptions.push(subscription);
+  } else {
+    subscriptions[index] = subscription;
+  }
+  await env.SUBSCRIPTIONS_KV.put('subscriptions', JSON.stringify(subscriptions));
+  return subscription;
+}
+
+async function createWebMonitorSubscription(subscription, env) {
+  if (!subscription.name || !String(subscription.name).trim()) {
+    return { success: false, message: '请输入监控名称' };
+  }
+
+  const settings = normalizeWebMonitorSettings(subscription);
+  try {
+    settings.monitorUrl = validateMonitorUrl(settings.monitorUrl).href;
+  } catch (error) {
+    return { success: false, message: error?.message || '监控网址无效' };
+  }
+
+  const nowIso = new Date().toISOString();
+  const newSubscription = {
+    id: Date.now().toString(),
+    name: String(subscription.name).trim(),
+    subscriptionMode: 'web-monitor',
+    customType: '网页监控',
+    category: subscription.category ? String(subscription.category).trim() : '',
+    notes: subscription.notes ? String(subscription.notes).trim() : '',
+    ...settings,
+    monitorSeenUrls: [],
+    monitorInitializedAt: null,
+    monitorLastCheckedAt: null,
+    monitorLastAttemptAt: null,
+    monitorStatus: 'pending',
+    monitorLastError: '',
+    monitorLatestTitle: '',
+    monitorLatestUrl: '',
+    monitorLastNewItemAt: null,
+    isActive: subscription.isActive !== false,
+    autoRenew: false,
+    useLunar: false,
+    createdAt: nowIso
+  };
+
+  await saveSubscriptionRecord(newSubscription, env);
+  return { success: true, subscription: newSubscription };
+}
+
+async function updateWebMonitorSubscription(existing, subscription, env) {
+  if (!subscription.name || !String(subscription.name).trim()) {
+    return { success: false, message: '请输入监控名称' };
+  }
+
+  const settings = normalizeWebMonitorSettings({ ...existing, ...subscription });
+  try {
+    settings.monitorUrl = validateMonitorUrl(settings.monitorUrl).href;
+  } catch (error) {
+    return { success: false, message: error?.message || '监控网址无效' };
+  }
+
+  const previous = normalizeWebMonitorSettings(existing);
+  const settingsChanged =
+    previous.monitorUrl !== settings.monitorUrl ||
+    previous.monitorItemSelector !== settings.monitorItemSelector ||
+    previous.monitorDateSelector !== settings.monitorDateSelector ||
+    previous.monitorSummarySelector !== settings.monitorSummarySelector;
+
+  const updated = {
+    ...existing,
+    name: String(subscription.name).trim(),
+    subscriptionMode: 'web-monitor',
+    customType: '网页监控',
+    category: subscription.category !== undefined ? String(subscription.category).trim() : (existing.category || ''),
+    notes: subscription.notes !== undefined ? String(subscription.notes).trim() : (existing.notes || ''),
+    ...settings,
+    monitorSeenUrls: settingsChanged ? [] : (existing.monitorSeenUrls || []),
+    monitorInitializedAt: settingsChanged ? null : (existing.monitorInitializedAt || null),
+    monitorLastCheckedAt: settingsChanged ? null : (existing.monitorLastCheckedAt || null),
+    monitorLastAttemptAt: settingsChanged ? null : (existing.monitorLastAttemptAt || null),
+    monitorStatus: settingsChanged ? 'pending' : (existing.monitorStatus || 'pending'),
+    monitorLastError: settingsChanged ? '' : (existing.monitorLastError || ''),
+    monitorLatestTitle: settingsChanged ? '' : (existing.monitorLatestTitle || ''),
+    monitorLatestUrl: settingsChanged ? '' : (existing.monitorLatestUrl || ''),
+    monitorLastNewItemAt: settingsChanged ? null : (existing.monitorLastNewItemAt || null),
+    isActive: subscription.isActive !== undefined ? subscription.isActive : existing.isActive !== false,
+    autoRenew: false,
+    useLunar: false,
+    updatedAt: new Date().toISOString()
+  };
+
+  await saveSubscriptionRecord(updated, env);
+  return { success: true, subscription: updated };
+}
+
+async function runSingleWebMonitor(subscription, env, options = {}) {
+  const config = options.config || await getConfig(env);
+  return checkWebMonitorSubscription(subscription, {
+    save: next => saveSubscriptionRecord(next, env),
+    notify: (title, content, currentSubscription) => sendNotificationToAllChannels(
+      title,
+      content,
+      config,
+      '[网页监控]',
+      { metadata: { tags: [currentSubscription.name, '网页监控'] } }
+    )
+  }, options);
+}
+
+async function checkWebMonitorNow(id, env) {
+  const subscription = await getSubscription(id, env);
+  if (!subscription || subscription.subscriptionMode !== 'web-monitor') {
+    return { success: false, message: '未找到该网页监控' };
+  }
+
+  const result = await runSingleWebMonitor(subscription, env);
+  if (result.status === 'error') {
+    return { success: false, message: '检查失败：' + result.error, result };
+  }
+  if (result.status === 'notify-error') {
+    return { success: false, message: '发现新内容，但通知渠道发送失败', result };
+  }
+  if (result.status === 'initialized') {
+    return { success: true, message: `首次检查完成，已静默记录 ${result.itemCount} 条现有内容`, result };
+  }
+  if (result.status === 'notified') {
+    return { success: true, message: `发现 ${result.newItems.length} 条新内容，通知已发送`, result };
+  }
+  return { success: true, message: '检查完成，暂无新内容', result };
+}
+
+async function checkWebMonitors(env) {
+  const now = new Date();
+  const subscriptions = await getAllSubscriptions(env);
+  const config = await getConfig(env);
+  const results = [];
+
+  for (const subscription of subscriptions) {
+    if (subscription.subscriptionMode !== 'web-monitor' || subscription.isActive === false) continue;
+    const settings = normalizeWebMonitorSettings(subscription);
+    const lastChecked = subscription.monitorLastCheckedAt
+      ? new Date(subscription.monitorLastCheckedAt).getTime()
+      : NaN;
+    const elapsedHours = Number.isFinite(lastChecked) ? (now.getTime() - lastChecked) / MS_PER_HOUR : Infinity;
+    if (elapsedHours + 0.1 < settings.monitorIntervalHours) continue;
+    const result = await runSingleWebMonitor(subscription, env, { now, config });
+    results.push({ id: subscription.id, name: subscription.name, status: result.status });
+  }
+
+  console.log('[网页监控] 本次检查结果:', JSON.stringify(results));
+  return results;
+}
+
 // 2. 修改 createSubscription，支持 useLunar 字段
 async function createSubscription(subscription, env) {
   try {
+    if (subscription.subscriptionMode === 'web-monitor') {
+      return await createWebMonitorSubscription(subscription, env);
+    }
+
     const subscriptions = await getAllSubscriptions(env);
 
     if (!subscription.name || !subscription.expiryDate) {
@@ -4719,6 +5155,10 @@ async function updateSubscription(id, subscription, env) {
 
     if (index === -1) {
       return { success: false, message: '订阅不存在' };
+    }
+
+    if (subscription.subscriptionMode === 'web-monitor' || subscriptions[index].subscriptionMode === 'web-monitor') {
+      return await updateWebMonitorSubscription(subscriptions[index], subscription, env);
     }
 
     if (!subscription.name || !subscription.expiryDate) {
@@ -4847,6 +5287,29 @@ async function testSingleSubscriptionNotification(id, env) {
       return { success: false, message: '未找到该订阅' };
     }
     const config = await getConfig(env);
+
+    if (subscription.subscriptionMode === 'web-monitor') {
+      const items = await fetchWebMonitorItems(subscription);
+      const notificationResult = await sendNotificationToAllChannels(
+        `网页监控测试：${subscription.name}`,
+        formatWebMonitorNotification(subscription, items.slice(0, 1)),
+        config,
+        '[网页监控测试]',
+        { metadata: { tags: [subscription.name, '网页监控'] } }
+      );
+      if (notificationResult.attempted === 0) {
+        return { success: false, message: '网页读取成功，但尚未启用通知渠道' };
+      }
+      if (notificationResult.successCount === 0) {
+        return { success: false, message: `网页读取成功，但 ${notificationResult.attempted} 个通知渠道均发送失败` };
+      }
+      return {
+        success: true,
+        message: notificationResult.failedCount > 0
+          ? `测试完成：成功 ${notificationResult.successCount} 个、失败 ${notificationResult.failedCount} 个渠道`
+          : `网页读取及通知测试成功（${notificationResult.successCount} 个渠道）`
+      };
+    }
 
     const title = `手动测试通知: ${subscription.name}`;
 
@@ -5211,46 +5674,56 @@ ${reminderText}
 
 async function sendNotificationToAllChannels(title, commonContent, config, logPrefix = '[定时任务]', options = {}) {
   const metadata = options.metadata || {};
+    const results = [];
     if (!config.ENABLED_NOTIFIERS || config.ENABLED_NOTIFIERS.length === 0) {
         console.log(`${logPrefix} 未启用任何通知渠道。`);
-        return;
+        return { attempted: 0, successCount: 0, failedCount: 0, results };
     }
 
     if (config.ENABLED_NOTIFIERS.includes('notifyx')) {
         const notifyxContent = `## ${title}\n\n${commonContent}`;
         const success = await sendNotifyXNotification(title, notifyxContent, `订阅提醒`, config);
+        results.push({ channel: 'notifyx', success: !!success });
         console.log(`${logPrefix} 发送NotifyX通知 ${success ? '成功' : '失败'}`);
     }
     if (config.ENABLED_NOTIFIERS.includes('telegram')) {
         const telegramContent = `*${title}*\n\n${commonContent}`;
         const success = await sendTelegramNotification(telegramContent, config);
+        results.push({ channel: 'telegram', success: !!success });
         console.log(`${logPrefix} 发送Telegram通知 ${success ? '成功' : '失败'}`);
     }
     if (config.ENABLED_NOTIFIERS.includes('webhook')) {
         const webhookContent = commonContent.replace(/(\**|\*|##|#|`)/g, '');
         const success = await sendWebhookNotification(title, webhookContent, config, metadata);
+        results.push({ channel: 'webhook', success: !!success });
         console.log(`${logPrefix} 发送Webhook通知 ${success ? '成功' : '失败'}`);
     }
     if (config.ENABLED_NOTIFIERS.includes('wechatbot')) {
         const wechatbotContent = commonContent.replace(/(\**|\*|##|#|`)/g, '');
         const success = await sendWechatBotNotification(title, wechatbotContent, config);
+        results.push({ channel: 'wechatbot', success: !!success });
         console.log(`${logPrefix} 发送企业微信机器人通知 ${success ? '成功' : '失败'}`);
     }
     if (config.ENABLED_NOTIFIERS.includes('weixin')) {
         const weixinContent = `【${title}】\n\n${commonContent.replace(/(\**|\*|##|#|`)/g, '')}`;
         const result = await sendWeComNotification(weixinContent, config);
+        results.push({ channel: 'weixin', success: !!result.success });
         console.log(`${logPrefix} 发送企业微信通知 ${result.success ? '成功' : '失败'}. ${result.message}`);
     }
     if (config.ENABLED_NOTIFIERS.includes('email')) {
         const emailContent = commonContent.replace(/(\**|\*|##|#|`)/g, '');
         const success = await sendEmailNotification(title, emailContent, config);
+        results.push({ channel: 'email', success: !!success });
         console.log(`${logPrefix} 发送邮件通知 ${success ? '成功' : '失败'}`);
     }
     if (config.ENABLED_NOTIFIERS.includes('bark')) {
         const barkContent = commonContent.replace(/(\**|\*|##|#|`)/g, '');
         const success = await sendBarkNotification(title, barkContent, config);
+        results.push({ channel: 'bark', success: !!success });
         console.log(`${logPrefix} 发送Bark通知 ${success ? '成功' : '失败'}`);
     }
+    const successCount = results.filter(result => result.success).length;
+    return { attempted: results.length, successCount, failedCount: results.length - successCount, results };
 }
 
 async function sendTelegramNotification(message, config) {
@@ -5472,6 +5945,10 @@ async function checkExpiringSubscriptions(env) {
 for (const subscription of subscriptions) {
   if (subscription.isActive === false) {
     console.log('[定时任务] 订阅 "' + subscription.name + '" 已停用，跳过');
+    continue;
+  }
+
+  if (subscription.subscriptionMode === 'web-monitor') {
     continue;
   }
 
@@ -5769,5 +6246,6 @@ export default {
     const currentTime = getCurrentTimeInTimezone(timezone);
     console.log('[Workers] 定时任务触发 UTC:', new Date().toISOString(), timezone + ':', currentTime.toLocaleString('zh-CN', {timeZone: timezone}));
     await checkExpiringSubscriptions(env);
+    await checkWebMonitors(env);
   }
 };

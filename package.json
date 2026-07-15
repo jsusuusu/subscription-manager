@@ -2,7 +2,11 @@
   "name": "subscription-manager",
   "version": "2.0.0",
   "description": "订阅管理系统 - 基于CloudFlare Workers",
+  "type": "module",
   "main": "index.js",
+  "scripts": {
+    "test": "node --test"
+  },
   "keywords": [
     "cloudflare-workers",
     "subscription-management",
