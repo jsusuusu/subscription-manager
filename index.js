@@ -4,6 +4,7 @@ import {
   checkWebMonitorSubscription,
   fetchWebMonitorItems,
   formatWebMonitorNotification,
+  isScheduledWebMonitorDue,
   normalizeWebMonitorSettings,
   validateMonitorUrl
 } from './web-monitor.js';
@@ -4943,6 +4944,7 @@ async function createWebMonitorSubscription(subscription, env) {
     monitorSeenUrls: [],
     monitorInitializedAt: null,
     monitorLastCheckedAt: null,
+    monitorLastScheduledAt: null,
     monitorLastAttemptAt: null,
     monitorStatus: 'pending',
     monitorLastError: '',
@@ -4989,6 +4991,7 @@ async function updateWebMonitorSubscription(existing, subscription, env) {
     monitorSeenUrls: settingsChanged ? [] : (existing.monitorSeenUrls || []),
     monitorInitializedAt: settingsChanged ? null : (existing.monitorInitializedAt || null),
     monitorLastCheckedAt: settingsChanged ? null : (existing.monitorLastCheckedAt || null),
+    monitorLastScheduledAt: settingsChanged ? null : (existing.monitorLastScheduledAt || null),
     monitorLastAttemptAt: settingsChanged ? null : (existing.monitorLastAttemptAt || null),
     monitorStatus: settingsChanged ? 'pending' : (existing.monitorStatus || 'pending'),
     monitorLastError: settingsChanged ? '' : (existing.monitorLastError || ''),
@@ -5041,21 +5044,16 @@ async function checkWebMonitorNow(id, env) {
   return { success: true, message: '检查完成，暂无新内容', result };
 }
 
-async function checkWebMonitors(env) {
-  const now = new Date();
+async function checkWebMonitors(env, options = {}) {
+  const now = options.now || new Date();
   const subscriptions = await getAllSubscriptions(env);
   const config = await getConfig(env);
   const results = [];
 
   for (const subscription of subscriptions) {
     if (subscription.subscriptionMode !== 'web-monitor' || subscription.isActive === false) continue;
-    const settings = normalizeWebMonitorSettings(subscription);
-    const lastChecked = subscription.monitorLastCheckedAt
-      ? new Date(subscription.monitorLastCheckedAt).getTime()
-      : NaN;
-    const elapsedHours = Number.isFinite(lastChecked) ? (now.getTime() - lastChecked) / MS_PER_HOUR : Infinity;
-    if (elapsedHours + 0.1 < settings.monitorIntervalHours) continue;
-    const result = await runSingleWebMonitor(subscription, env, { now, config });
+    if (!isScheduledWebMonitorDue(subscription, now)) continue;
+    const result = await runSingleWebMonitor(subscription, env, { now, config, isScheduled: true });
     results.push({ id: subscription.id, name: subscription.name, status: result.status });
   }
 
@@ -6246,6 +6244,8 @@ export default {
     const currentTime = getCurrentTimeInTimezone(timezone);
     console.log('[Workers] 定时任务触发 UTC:', new Date().toISOString(), timezone + ':', currentTime.toLocaleString('zh-CN', {timeZone: timezone}));
     await checkExpiringSubscriptions(env);
-    await checkWebMonitors(env);
+    const scheduledTime = Number(event?.scheduledTime);
+    const scheduledAt = Number.isFinite(scheduledTime) ? new Date(scheduledTime) : new Date();
+    await checkWebMonitors(env, { now: scheduledAt });
   }
 };

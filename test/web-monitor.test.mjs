@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  checkWebMonitorSubscription,
   findNewWebMonitorItems,
   formatWebMonitorNotification,
+  isScheduledWebMonitorDue,
   normalizeWebMonitorSettings,
   validateMonitorUrl
 } from '../web-monitor.js';
@@ -42,4 +44,44 @@ test('通知正文包含文章和监控页链接', () => {
   assert.match(content, /开放注册/);
   assert.match(content, /https:\/\/example\.com\/post/);
   assert.match(content, /https:\/\/example\.com\/list/);
+});
+
+test('manual checks do not delay scheduled web monitor checks', () => {
+  const subscription = {
+    monitorIntervalHours: 24,
+    monitorLastCheckedAt: '2026-07-15T08:13:00.000Z',
+    monitorLastScheduledAt: null
+  };
+
+  assert.equal(isScheduledWebMonitorDue(subscription, '2026-07-16T08:00:00.000Z'), true);
+});
+
+test('scheduled checks use the previous scheduled run for their interval', () => {
+  const subscription = {
+    monitorIntervalHours: 24,
+    monitorLastScheduledAt: '2026-07-15T08:00:00.000Z'
+  };
+
+  assert.equal(isScheduledWebMonitorDue(subscription, '2026-07-16T07:59:59.999Z'), false);
+  assert.equal(isScheduledWebMonitorDue(subscription, '2026-07-16T08:00:00.000Z'), true);
+});
+
+test('scheduled runs persist their own timestamp', async () => {
+  let savedSubscription;
+  const now = new Date('2026-07-16T08:00:00.000Z');
+  const result = await checkWebMonitorSubscription(
+    { monitorUrl: 'https://example.com/list' },
+    {
+      save: async subscription => { savedSubscription = subscription; },
+      notify: async () => ({ successCount: 1 })
+    },
+    {
+      now,
+      isScheduled: true,
+      fetchImpl: async () => { throw new Error('offline'); }
+    }
+  );
+
+  assert.equal(result.status, 'error');
+  assert.equal(savedSubscription.monitorLastScheduledAt, now.toISOString());
 });

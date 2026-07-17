@@ -29,6 +29,21 @@ export function normalizeWebMonitorSettings(source = {}) {
   };
 }
 
+export function isScheduledWebMonitorDue(subscription = {}, scheduledAt = new Date()) {
+  const scheduledTimestamp = scheduledAt instanceof Date
+    ? scheduledAt.getTime()
+    : new Date(scheduledAt).getTime();
+  const lastScheduledTimestamp = subscription.monitorLastScheduledAt
+    ? new Date(subscription.monitorLastScheduledAt).getTime()
+    : NaN;
+
+  if (!Number.isFinite(scheduledTimestamp)) return false;
+  if (!Number.isFinite(lastScheduledTimestamp)) return true;
+
+  const { monitorIntervalHours } = normalizeWebMonitorSettings(subscription);
+  return scheduledTimestamp - lastScheduledTimestamp >= monitorIntervalHours * 60 * 60 * 1000;
+}
+
 export function validateMonitorUrl(input) {
   let url;
   try {
@@ -218,6 +233,7 @@ export async function checkWebMonitorSubscription(subscription, callbacks, optio
   const now = options.now || new Date();
   const nowIso = now.toISOString();
   const fetchImpl = options.fetchImpl || fetch;
+  const scheduledState = options.isScheduled ? { monitorLastScheduledAt: nowIso } : {};
 
   try {
     const items = await fetchWebMonitorItems(subscription, fetchImpl);
@@ -227,6 +243,7 @@ export async function checkWebMonitorSubscription(subscription, callbacks, optio
     if (!subscription.monitorInitializedAt) {
       const next = {
         ...subscription,
+        ...scheduledState,
         monitorSeenUrls: mergeSeenUrls(currentUrls, previousSeen),
         monitorInitializedAt: nowIso,
         monitorLastCheckedAt: nowIso,
@@ -255,6 +272,7 @@ export async function checkWebMonitorSubscription(subscription, callbacks, optio
 
     const next = {
       ...subscription,
+      ...scheduledState,
       monitorSeenUrls: shouldCommitNewUrls ? mergeSeenUrls(currentUrls, previousSeen) : previousSeen,
       monitorLastCheckedAt: shouldCommitNewUrls ? nowIso : (subscription.monitorLastCheckedAt || null),
       monitorLastAttemptAt: nowIso,
@@ -277,6 +295,7 @@ export async function checkWebMonitorSubscription(subscription, callbacks, optio
     const message = error?.message || String(error);
     const next = {
       ...subscription,
+      ...scheduledState,
       monitorLastAttemptAt: nowIso,
       monitorStatus: 'error',
       monitorLastError: message,
