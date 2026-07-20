@@ -211,20 +211,80 @@ function mergeSeenUrls(current, previous) {
   return merged;
 }
 
+function normalizeItemFingerprintMap(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const normalized = {};
+  for (const [url, fingerprint] of Object.entries(value)) {
+    if (typeof url !== 'string' || !url || typeof fingerprint !== 'string') continue;
+    normalized[url] = fingerprint;
+  }
+  return normalized;
+}
+
+export function getWebMonitorItemFingerprint(item = {}) {
+  const title = compactText(item.title);
+  const publishedAt = compactText(item.publishedAt);
+  // Listing summaries often contain volatile view/comment counters. Prefer the
+  // stable publish/update time and only use the summary when no time is exposed.
+  const summaryFallback = publishedAt ? '' : compactText(item.summary);
+  return JSON.stringify([title, publishedAt, summaryFallback]);
+}
+
+function mergeItemFingerprints(items, previousFingerprints, orderedUrls) {
+  const previous = normalizeItemFingerprintMap(previousFingerprints);
+  const current = new Map(
+    items
+      .filter(item => typeof item?.url === 'string' && item.url)
+      .map(item => [item.url, getWebMonitorItemFingerprint(item)])
+  );
+  const merged = {};
+
+  for (const url of orderedUrls) {
+    if (current.has(url)) {
+      merged[url] = current.get(url);
+    } else if (Object.prototype.hasOwnProperty.call(previous, url)) {
+      merged[url] = previous[url];
+    }
+  }
+  return merged;
+}
+
 export function findNewWebMonitorItems(subscription, items) {
   const seen = new Set(Array.isArray(subscription.monitorSeenUrls) ? subscription.monitorSeenUrls : []);
   return items.filter(item => !seen.has(item.url));
 }
 
+export function findWebMonitorChanges(subscription, items) {
+  const seen = new Set(Array.isArray(subscription.monitorSeenUrls) ? subscription.monitorSeenUrls : []);
+  const fingerprints = normalizeItemFingerprintMap(subscription.monitorItemFingerprints);
+  const changes = [];
+
+  for (const item of items) {
+    if (!seen.has(item.url)) {
+      changes.push({ ...item, changeType: 'new' });
+      continue;
+    }
+
+    // Legacy subscriptions have URLs but no fingerprints. Baseline them
+    // silently on the next successful check instead of notifying every item.
+    if (!Object.prototype.hasOwnProperty.call(fingerprints, item.url)) continue;
+    if (fingerprints[item.url] !== getWebMonitorItemFingerprint(item)) {
+      changes.push({ ...item, changeType: 'updated' });
+    }
+  }
+  return changes;
+}
+
 export function formatWebMonitorNotification(subscription, items) {
   const blocks = items.slice(0, 10).map(item => {
-    const parts = [`新内容：${item.title || '发现新内容'}`];
+    const label = item.changeType === 'updated' ? '内容更新' : '新内容';
+    const parts = [`${label}：${item.title || '发现网页变化'}`];
     if (item.publishedAt) parts.push(`发布时间：${item.publishedAt}`);
     if (item.summary) parts.push(item.summary);
     parts.push(item.url);
     return parts.join('\n');
   });
-  if (items.length > 10) blocks.push(`另有 ${items.length - 10} 条新内容，请打开监控页查看。`);
+  if (items.length > 10) blocks.push(`另有 ${items.length - 10} 条新增或更新内容，请打开监控页查看。`);
   blocks.push(`监控页面：${subscription.monitorUrl}`);
   return blocks.join('\n\n');
 }
@@ -239,12 +299,15 @@ export async function checkWebMonitorSubscription(subscription, callbacks, optio
     const items = await fetchWebMonitorItems(subscription, fetchImpl);
     const currentUrls = items.map(item => item.url);
     const previousSeen = Array.isArray(subscription.monitorSeenUrls) ? subscription.monitorSeenUrls : [];
+    const previousFingerprints = normalizeItemFingerprintMap(subscription.monitorItemFingerprints);
 
     if (!subscription.monitorInitializedAt) {
+      const nextSeenUrls = mergeSeenUrls(currentUrls, previousSeen);
       const next = {
         ...subscription,
         ...scheduledState,
-        monitorSeenUrls: mergeSeenUrls(currentUrls, previousSeen),
+        monitorSeenUrls: nextSeenUrls,
+        monitorItemFingerprints: mergeItemFingerprints(items, previousFingerprints, nextSeenUrls),
         monitorInitializedAt: nowIso,
         monitorLastCheckedAt: nowIso,
         monitorLastAttemptAt: nowIso,
@@ -258,36 +321,40 @@ export async function checkWebMonitorSubscription(subscription, callbacks, optio
       return { status: 'initialized', itemCount: items.length, newItems: [], sentCount: 0, subscription: next };
     }
 
-    const newItems = findNewWebMonitorItems(subscription, items);
+    const changedItems = findWebMonitorChanges(subscription, items);
     let notificationResult = null;
-    let shouldCommitNewUrls = newItems.length === 0;
-    if (newItems.length > 0) {
+    let shouldCommitChanges = changedItems.length === 0;
+    if (changedItems.length > 0) {
       notificationResult = await callbacks.notify(
         `网页更新：${subscription.name}`,
-        formatWebMonitorNotification(subscription, newItems),
+        formatWebMonitorNotification(subscription, changedItems),
         subscription
       );
-      shouldCommitNewUrls = Number(notificationResult?.successCount || 0) > 0;
+      shouldCommitChanges = Number(notificationResult?.successCount || 0) > 0;
     }
 
+    const nextSeenUrls = shouldCommitChanges ? mergeSeenUrls(currentUrls, previousSeen) : previousSeen;
     const next = {
       ...subscription,
       ...scheduledState,
-      monitorSeenUrls: shouldCommitNewUrls ? mergeSeenUrls(currentUrls, previousSeen) : previousSeen,
-      monitorLastCheckedAt: shouldCommitNewUrls ? nowIso : (subscription.monitorLastCheckedAt || null),
+      monitorSeenUrls: nextSeenUrls,
+      monitorItemFingerprints: shouldCommitChanges
+        ? mergeItemFingerprints(items, previousFingerprints, nextSeenUrls)
+        : previousFingerprints,
+      monitorLastCheckedAt: shouldCommitChanges ? nowIso : (subscription.monitorLastCheckedAt || null),
       monitorLastAttemptAt: nowIso,
-      monitorStatus: newItems.length > 0 && !shouldCommitNewUrls ? 'notify-error' : 'ready',
-      monitorLastError: newItems.length > 0 && !shouldCommitNewUrls ? '发现新内容，但所有通知渠道均发送失败' : '',
+      monitorStatus: changedItems.length > 0 && !shouldCommitChanges ? 'notify-error' : 'ready',
+      monitorLastError: changedItems.length > 0 && !shouldCommitChanges ? '发现新增或更新内容，但所有通知渠道均发送失败' : '',
       monitorLatestTitle: items[0]?.title || '',
       monitorLatestUrl: items[0]?.url || '',
-      monitorLastNewItemAt: newItems.length > 0 && shouldCommitNewUrls ? nowIso : (subscription.monitorLastNewItemAt || null),
+      monitorLastNewItemAt: changedItems.length > 0 && shouldCommitChanges ? nowIso : (subscription.monitorLastNewItemAt || null),
       updatedAt: nowIso
     };
     await callbacks.save(next);
     return {
-      status: newItems.length === 0 ? 'unchanged' : (shouldCommitNewUrls ? 'notified' : 'notify-error'),
+      status: changedItems.length === 0 ? 'unchanged' : (shouldCommitChanges ? 'notified' : 'notify-error'),
       itemCount: items.length,
-      newItems,
+      newItems: changedItems,
       sentCount: Number(notificationResult?.successCount || 0),
       subscription: next
     };

@@ -4942,6 +4942,7 @@ async function createWebMonitorSubscription(subscription, env) {
     notes: subscription.notes ? String(subscription.notes).trim() : '',
     ...settings,
     monitorSeenUrls: [],
+    monitorItemFingerprints: {},
     monitorInitializedAt: null,
     monitorLastCheckedAt: null,
     monitorLastScheduledAt: null,
@@ -4989,6 +4990,7 @@ async function updateWebMonitorSubscription(existing, subscription, env) {
     notes: subscription.notes !== undefined ? String(subscription.notes).trim() : (existing.notes || ''),
     ...settings,
     monitorSeenUrls: settingsChanged ? [] : (existing.monitorSeenUrls || []),
+    monitorItemFingerprints: settingsChanged ? {} : (existing.monitorItemFingerprints || {}),
     monitorInitializedAt: settingsChanged ? null : (existing.monitorInitializedAt || null),
     monitorLastCheckedAt: settingsChanged ? null : (existing.monitorLastCheckedAt || null),
     monitorLastScheduledAt: settingsChanged ? null : (existing.monitorLastScheduledAt || null),
@@ -5033,15 +5035,15 @@ async function checkWebMonitorNow(id, env) {
     return { success: false, message: '检查失败：' + result.error, result };
   }
   if (result.status === 'notify-error') {
-    return { success: false, message: '发现新内容，但通知渠道发送失败', result };
+    return { success: false, message: '发现新增或更新内容，但通知渠道发送失败', result };
   }
   if (result.status === 'initialized') {
     return { success: true, message: `首次检查完成，已静默记录 ${result.itemCount} 条现有内容`, result };
   }
   if (result.status === 'notified') {
-    return { success: true, message: `发现 ${result.newItems.length} 条新内容，通知已发送`, result };
+    return { success: true, message: `发现 ${result.newItems.length} 条新增或更新内容，通知已发送`, result };
   }
-  return { success: true, message: '检查完成，暂无新内容', result };
+  return { success: true, message: '检查完成，暂无新增或更新内容', result };
 }
 
 async function checkWebMonitors(env, options = {}) {
